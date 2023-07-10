@@ -652,6 +652,21 @@ fn resize() {
     assert_eq!(add_add, m.resize(5, 6, 42));
     assert_eq!(add_del, m.resize(5, 2, 42));
     assert_eq!(del_add, m.resize(1, 8, 42));
+
+    let dyn_m = m.view((0,0), (m.nrows(), m.ncols())).into_owned();
+    let inplace_op_ret = |op: fn(&mut DMatrix<i32>)| {
+        let mut copy = dyn_m.clone();
+        op(&mut copy);
+        copy
+    };
+    assert_eq!(add_colls, inplace_op_ret(|x| x.resize_mut(3, 6, 42)));
+    assert_eq!(del_colls, inplace_op_ret(|x| x.resize_mut(3, 4, 42)));
+    assert_eq!(add_rows, inplace_op_ret(|x| x.resize_mut(4, 5, 42)));
+    assert_eq!(del_rows, inplace_op_ret(|x| x.resize_mut(2, 5, 42)));
+    assert_eq!(del_del, inplace_op_ret(|x| x.resize_mut(1, 2, 42)));
+    assert_eq!(add_add, inplace_op_ret(|x| x.resize_mut(5, 6, 42)));
+    assert_eq!(add_del, inplace_op_ret(|x| x.resize_mut(5, 2, 42)));
+    assert_eq!(del_add, inplace_op_ret(|x| x.resize_mut(1, 8, 42)));
 }
 
 #[test]

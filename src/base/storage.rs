@@ -261,3 +261,14 @@ where
     /// Reshapes the storage into the output storage type.
     fn reshape_generic(self, nrows: R2, ncols: C2) -> Self::Output;
 }
+
+/// A matrix storage that can be reshaped in-place.
+pub trait InplaceResizableStorage<T, R, C>: RawStorage<T, R, C>
+where
+    T: Scalar,
+    R: Dim,
+    C: Dim,
+{
+    /// Reshapes the storage into the output storage type.
+    fn resize_generic_inplace(&mut self, nrows: R, ncols: C, fill_val: T);
+}

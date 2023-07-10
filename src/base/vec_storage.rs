@@ -5,7 +5,9 @@ use crate::base::allocator::Allocator;
 use crate::base::constraint::{SameNumberOfRows, ShapeConstraint};
 use crate::base::default_allocator::DefaultAllocator;
 use crate::base::dimension::{Dim, DimName, Dyn, U1};
-use crate::base::storage::{IsContiguous, Owned, RawStorage, RawStorageMut, ReshapableStorage};
+use crate::base::storage::{
+    InplaceResizableStorage, IsContiguous, Owned, RawStorage, RawStorageMut, ReshapableStorage,
+};
 use crate::base::{Scalar, Vector};
 
 #[cfg(feature = "serde-serialize-no-std")]
@@ -394,6 +396,38 @@ where
             nrows,
             ncols,
         }
+    }
+}
+
+impl<T, C> InplaceResizableStorage<T, Dyn, C> for VecStorage<T, Dyn, C>
+where
+    T: Scalar,
+    C: Dim,
+{
+    fn resize_generic_inplace(&mut self, nrows: Dyn, ncols: C, fill_val: T) {
+        let new_size = nrows.value() * ncols.value();
+        unsafe {
+            let vec = self.as_vec_mut();
+            vec.resize(new_size, fill_val);
+        }
+        self.nrows = nrows;
+        self.ncols = ncols;
+    }
+}
+
+impl<T, R> InplaceResizableStorage<T, R, Dyn> for VecStorage<T, R, Dyn>
+where
+    T: Scalar,
+    R: DimName,
+{
+    fn resize_generic_inplace(&mut self, nrows: R, ncols: Dyn, fill_val: T) {
+        let new_size = nrows.value() * ncols.value();
+        unsafe {
+            let vec = self.as_vec_mut();
+            vec.resize(new_size, fill_val);
+        }
+        self.nrows = nrows;
+        self.ncols = ncols;
     }
 }
 

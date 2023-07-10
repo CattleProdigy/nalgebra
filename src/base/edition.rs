@@ -7,9 +7,12 @@ use std::ptr;
 use crate::base::allocator::{Allocator, Reallocator};
 use crate::base::constraint::{DimEq, SameNumberOfColumns, SameNumberOfRows, ShapeConstraint};
 #[cfg(any(feature = "std", feature = "alloc"))]
-use crate::base::dimension::Dyn;
-use crate::base::dimension::{Const, Dim, DimAdd, DimDiff, DimMin, DimMinimum, DimSub, DimSum, U1};
-use crate::base::storage::{RawStorage, RawStorageMut, ReshapableStorage};
+use crate::base::dimension::{
+    Const, Dim, DimAdd, DimDiff, DimMin, DimMinimum, DimName, DimSub, DimSum, Dyn, U1,
+};
+use crate::base::storage::{
+    InplaceResizableStorage, Owned, RawStorage, RawStorageMut, ReshapableStorage,
+};
 use crate::base::{DefaultAllocator, Matrix, OMatrix, RowVector, Scalar, Vector};
 use crate::{Storage, UninitMatrix};
 use std::mem::MaybeUninit;
@@ -807,6 +810,70 @@ impl<T: Scalar, R: Dim, C: Dim, S: Storage<T, R, C>> Matrix<T, R, C, S> {
         res
     }
 }
+/// # Resizing and reshaping
+impl<T: Scalar, R: Dim, C: Dim> Matrix<T, R, C, Owned<T, R, C>>
+where
+    Owned<T, R, C>: InplaceResizableStorage<T, R, C>,
+    DefaultAllocator: Allocator<T, R, C>,
+{
+    /// Resizes `self` such that it has dimensions `new_nrows × new_ncols`.
+    ///
+    /// The values are copied such that `self[(i, j)] == result[(i, j)]`. If the result has more
+    /// rows and/or columns than `self`, then the extra rows or columns are filled with `val`.
+    #[inline]
+    pub fn resize_generic_mut(&mut self, new_nrows: R, new_ncols: C, val: T) {
+        let (nrows, ncols) = self.shape();
+
+        if new_nrows.value() == nrows {
+            // if new_ncols.value() < ncols {
+            //     unsafe {
+            //         let num_cols_to_delete = ncols - new_ncols.value();
+            //         let col_ptr = self.data.ptr_mut().add(new_ncols.value() * nrows);
+            //         let s = ptr::slice_from_raw_parts_mut(col_ptr, num_cols_to_delete * nrows);
+            //         // Safety: drop the elements of the deleted columns.
+            //         //         these are the elements that will be truncated
+            //         //         by the `reallocate_copy` afterward.
+            //         ptr::drop_in_place(s)
+            //     };
+            // }
+
+            self.data.resize_generic_inplace(new_nrows, new_ncols, val);
+        } else {
+            unsafe {
+                if new_nrows.value() < nrows {
+                    compress_rows(
+                        &mut self.as_mut_slice(),
+                        nrows,
+                        ncols,
+                        new_nrows.value(),
+                        nrows - new_nrows.value(),
+                    );
+                    self.data
+                        .resize_generic_inplace(new_nrows, new_ncols, val.clone());
+                } else {
+                    self.data
+                        .resize_generic_inplace(new_nrows, new_ncols, val.clone());
+                    extend_rows(
+                        &mut self.as_mut_slice(),
+                        nrows,
+                        new_ncols.value(),
+                        nrows,
+                        new_nrows.value() - nrows,
+                    );
+                }
+            }
+
+            if new_ncols.value() > ncols {
+                self.columns_range_mut(ncols..).fill_with(|| val.clone());
+            }
+
+            if new_nrows.value() > nrows {
+                self.view_range_mut(nrows.., ..cmp::min(ncols, new_ncols.value()))
+                    .fill_with(|| val.clone());
+            }
+        }
+    }
+}
 
 /// # Resizing and reshaping
 impl<T: Scalar, R: Dim, C: Dim, S: Storage<T, R, C>> Matrix<T, R, C, S> {
@@ -1027,18 +1094,14 @@ impl<T: Scalar> OMatrix<T, Dyn, Dyn> {
     /// Defined only for owned fully-dynamic matrices, i.e., `DMatrix`.
     pub fn resize_mut(&mut self, new_nrows: usize, new_ncols: usize, val: T)
     where
-        DefaultAllocator: Reallocator<T, Dyn, Dyn, Dyn, Dyn>,
+        Owned<T, Dyn, Dyn>: InplaceResizableStorage<T, Dyn, Dyn>,
     {
-        // TODO: avoid the clone.
-        *self = self.clone().resize(new_nrows, new_ncols, val);
+        self.resize_generic_mut(Dyn(new_nrows), Dyn(new_ncols), val);
     }
 }
 
 #[cfg(any(feature = "std", feature = "alloc"))]
-impl<T: Scalar, C: Dim> OMatrix<T, Dyn, C>
-where
-    DefaultAllocator: Allocator<T, Dyn, C>,
-{
+impl<T: Scalar, C: Dim> OMatrix<T, Dyn, C> {
     /// Changes the number of rows of this matrix in-place.
     ///
     /// The values are copied such that `self[(i, j)] == result[(i, j)]`. If the result has more
@@ -1048,18 +1111,14 @@ where
     #[cfg(any(feature = "std", feature = "alloc"))]
     pub fn resize_vertically_mut(&mut self, new_nrows: usize, val: T)
     where
-        DefaultAllocator: Reallocator<T, Dyn, C, Dyn, C>,
+        Owned<T, Dyn, C>: InplaceResizableStorage<T, Dyn, C>,
     {
-        // TODO: avoid the clone.
-        *self = self.clone().resize_vertically(new_nrows, val);
+        self.resize_generic_mut(Dyn(new_nrows), self.shape_generic().1, val);
     }
 }
 
 #[cfg(any(feature = "std", feature = "alloc"))]
-impl<T: Scalar, R: Dim> OMatrix<T, R, Dyn>
-where
-    DefaultAllocator: Allocator<T, R, Dyn>,
-{
+impl<T: Scalar, R: DimName> OMatrix<T, R, Dyn> {
     /// Changes the number of column of this matrix in-place.
     ///
     /// The values are copied such that `self[(i, j)] == result[(i, j)]`. If the result has more
@@ -1069,10 +1128,9 @@ where
     #[cfg(any(feature = "std", feature = "alloc"))]
     pub fn resize_horizontally_mut(&mut self, new_ncols: usize, val: T)
     where
-        DefaultAllocator: Reallocator<T, R, Dyn, R, Dyn>,
+        Owned<T, R, Dyn>: InplaceResizableStorage<T, R, Dyn>,
     {
-        // TODO: avoid the clone.
-        *self = self.clone().resize_horizontally(new_ncols, val);
+        self.resize_generic_mut(self.shape_generic().0, Dyn(new_ncols), val);
     }
 }
 
